@@ -1,11 +1,12 @@
-import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from utils import load_pickle, save_pickle
+import pandas as pd
 
 import yfinance
-import pytz
+import requests
 import threading
+import pytz
 
 
 def get_sp500_tickers():
@@ -17,14 +18,22 @@ def get_sp500_tickers():
     return tickers
 
 
-def get_history(ticker, period_start, period_end, granularity="1d"):
-    df = (
-        yfinance.Ticker(ticker)
-        .history(
-            start=period_start, end=period_end, interval=granularity, auto_adjust=True
+def get_history(ticker, period_start, period_end, granularity="1d", tries=0):
+    try:
+        df = (
+            yfinance.Ticker(ticker)
+            .history(
+                start=period_start,
+                end=period_end,
+                interval=granularity,
+                auto_adjust=True,
+            )
+            .reset_index()
         )
-        .reset_index()
-    )
+    except Exception as err:
+        if tries < 5:
+            return get_history(ticker, period_start, period_end, granularity, tries + 1)
+        return pd.DataFrame()
     df = df.rename(
         columns={
             "Date": "datetime",
@@ -54,7 +63,6 @@ def get_histories(tickers, period_starts, period_ends, granularity="1d"):
         dfs[i] = df
 
     threads = [threading.Thread(target=_helper, args=(i,)) for i in range(len(tickers))]
-    print(threads)
     [thread.start() for thread in threads]
     [thread.join() for thread in threads]
     # filter out tickers w/o data
@@ -64,15 +72,20 @@ def get_histories(tickers, period_starts, period_ends, granularity="1d"):
 
 
 def get_ticker_dfs(start, end):
-    tickers = get_sp500_tickers()
-    starts = [start] * len(tickers)
-    ends = [end] * len(tickers)
-    tickers, dfs = get_histories(tickers, starts, ends, granularity="1d")
-    return tickers, {ticker: df for ticker, df in zip(tickers, dfs)}
+    try:
+        tickers, ticker_dfs = load_pickle("dataset.obj")
+    except Exception as err:
+        tickers = get_sp500_tickers()
+        starts = [start] * len(tickers)
+        ends = [end] * len(tickers)
+        tickers, dfs = get_histories(tickers, starts, ends, granularity="1d")
+        ticker_dfs = {ticker: df for ticker, df in zip(tickers, dfs)}
+        save_pickle("dataset.obj", (tickers, ticker_dfs))
+    return tickers, ticker_dfs
 
 
 period_start = datetime(2010, 1, 1, tzinfo=pytz.utc)
-period_end = datetime(2020, 1, 1, tzinfo=pytz.utc)
+period_end = datetime.now(pytz.utc)
 
 
 tickers, ticker_dfs = get_ticker_dfs(start=period_start, end=period_end)
